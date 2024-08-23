@@ -39,8 +39,6 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-//        configureScrollUpButton()
-//        configureScrollDownButton()
     }
 
     private fun findScrollableNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {

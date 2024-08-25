@@ -14,6 +14,5 @@ class AccessibilityServiceApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-
     }
 }

@@ -2,14 +2,17 @@ package tgound.example.myaccessibilityservice
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.accessibilityservice.GestureDescription.StrokeDescription
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Path
 import android.graphics.Point
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Environment
+import android.os.Handler
 import android.util.Log
-import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
@@ -17,6 +20,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import org.w3c.dom.Document
 import org.w3c.dom.Element
+import java.io.File
+import java.io.FileOutputStream
 import java.io.FileWriter
 import java.io.IOException
 import java.io.StringWriter
@@ -29,8 +34,57 @@ import javax.xml.transform.stream.StreamResult
 
 
 class MyAccessibilityService : AccessibilityService() {
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+    companion object {
+        const val ACTION_PERFORM_CLICK = "ACTION_PERFORM_CLICK"
+        const val EXTRA_X = "EXTRA_X"
+        const val EXTRA_Y = "EXTRA_Y"
+        const val ACTION_PERFORM_TYPE = "ACTION_PERFORM_TYPE"
+        const val TYPE_VALUE = "TYPE_VALUE"
+        const val ACTION_PERFORM_SCROLL = "ACTION_PERFORM_SCROLL"
+    }
 
+    private val receiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                ACTION_PERFORM_CLICK -> {
+                    val x = intent.getIntExtra(EXTRA_X, 0)
+                    val y = intent.getIntExtra(EXTRA_Y, 0)
+                    performClick(x, y)
+                }
+
+                ACTION_PERFORM_TYPE -> {
+                    val x = intent.getIntExtra(EXTRA_X, 0)
+                    val y = intent.getIntExtra(EXTRA_Y, 0)
+                    val text = intent.getStringExtra(TYPE_VALUE)
+                    performTextInput(x, y, text!!)
+                }
+
+                ACTION_PERFORM_SCROLL -> {
+                    continuouslyScroll()
+                }
+            }
+
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        registerReceiver(receiver, IntentFilter(ACTION_PERFORM_CLICK))
+        registerReceiver(receiver, IntentFilter(ACTION_PERFORM_SCROLL))
+        registerReceiver(receiver, IntentFilter(ACTION_PERFORM_TYPE))
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(receiver)
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event != null) {
+            val x = getNodePosition(event.source)?.first
+            val y = getNodePosition(event.source)?.second
+//            Log.d("AccessibilityPoint", "Point is: x = $x, y = $y, ${event.eventType}")
+        }
     }
 
     override fun onInterrupt() {
@@ -39,46 +93,76 @@ class MyAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Log.d("SERVICE", serviceInfo.toString())
     }
 
     private fun findScrollableNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val deque: Deque<AccessibilityNodeInfo> = ArrayDeque()
-        deque.add(root)
-        while (!deque.isEmpty()) {
-            val node = deque.removeFirst()
-            if (node.actionList.contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)) {
-                return node
-            }
-            for (i in 0 until node.childCount) {
-                deque.addLast(node.getChild(i))
+        if (root == null) return null
+
+        // Check if the current node is scrollable
+        if (root.isScrollable) {
+            return root
+        }
+
+        // If not, search through child nodes
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i)
+            if (child != null) {
+                val scrollable = findScrollableNode(child)
+                if (scrollable != null) {
+                    return scrollable
+                }
+                child.recycle()
             }
         }
+
         return null
     }
 
-    fun scrollDown() {
-        val scrollable = findScrollableNode(rootInActiveWindow)
+    fun scrollDown(context: Context) {
+        val scrollable = getRootFromContext(context)?.let { findScrollableNode(it) }
         scrollable?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id)
+        Log.d("SCROLL", "called")
     }
 
-    fun scrollUp() {
-        val scrollable = findScrollableNode(rootInActiveWindow)
-        scrollable?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id)
+    fun scrollUp(context: Context) {
+        val scrollable = getRootFromContext(context)?.let { findScrollableNode(it) }
+        scrollable?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD.id)
+        Log.d("SCROLL", "called")
     }
 
-    fun getRootViewUsingWindowManager(context: Context): View? {
-        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val display = windowManager.defaultDisplay
-        val point = Point()
-        display.getSize(point)
-
-        val rootView = FrameLayout(context)
-        rootView.layoutParams = ViewGroup.LayoutParams(point.x, point.y)
-
-        return rootView
+    fun continuouslyScroll() {
+        Handler().postDelayed(Runnable {
+            if (canScroll(rootInActiveWindow)) {
+                // If scroll was successful, schedule next scroll
+                continuouslyScroll()
+            } else {
+                // If scroll failed, we might have reached the end of the feed
+                Log.d("YouTubeScroll", "Reached end of feed or failed to scroll")
+            }
+        }, 2000) // 2 second delay between scrolls
     }
+
+
+    private fun canScroll(rootNode: AccessibilityNodeInfo?): Boolean {
+        if (rootNode == null) return false
+
+        // Find the scrollable view (usually a RecyclerView)
+        val scrollableNode = findScrollableNode(rootNode)
+
+        if (scrollableNode != null) {
+            // Perform the scroll action
+            val scrolled =
+                scrollableNode.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD.id)
+            scrollableNode.recycle()
+            return scrolled
+        }
+
+        return false
+    }
+
     fun nodeToString(context: Context) {
-        val ls = getAllNodes(getRootViewUsingWindowManager(context)?.createAccessibilityNodeInfo())
+        val ls = getAllNodes(getRootFromContext(context))
         val xmlString = convertToXml(ls)
         Log.d("XML", xmlString!!)
         for (node in ls) {
@@ -182,16 +266,41 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun getRootFromContext(context: Context) : AccessibilityNodeInfo? {
-       return getRootViewUsingWindowManager(context)?.createAccessibilityNodeInfo()
+    private fun getRootFromContext(context: Context): AccessibilityNodeInfo? {
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val display = windowManager.defaultDisplay
+        val point = Point()
+        display.getSize(point)
+
+        val rootView = FrameLayout(context)
+        rootView.layoutParams = ViewGroup.LayoutParams(point.x, point.y)
+        return rootView.createAccessibilityNodeInfo()
     }
 
-    fun saveXmlToFile(context: Context, filePath: String) {
-        val xmlString = convertToXml(getAllNodes(getRootFromContext(context)));
+    fun saveXmlToFile(context: Context, fileName: String, usePublicDirectory: Boolean = false) {
+        val xmlString = convertToXml(getAllNodes(getRootFromContext(context)))
+
         try {
-            FileWriter(filePath).use { writer ->
-                writer.write(xmlString)
-                println("XML file has been saved successfully to: $filePath")
+            if (usePublicDirectory) {
+                val downloadsDir =
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (downloadsDir != null) {
+                    val file = File(downloadsDir, fileName)
+                    FileOutputStream(file).use { outputStream ->
+                        if (xmlString != null) {
+                            outputStream.write(xmlString.toByteArray())
+                        }
+                        println("XML file has been saved successfully to: ${file.absolutePath}")
+                    }
+                } else {
+                    println("Unable to access the public Downloads directory")
+                }
+            } else {
+                // Use the provided file path (internal storage)
+                FileWriter(fileName).use { writer ->
+                    writer.write(xmlString)
+                    println("XML file has been saved successfully to: $fileName")
+                }
             }
         } catch (e: IOException) {
             System.err.println("An error occurred while saving the XML file: " + e.message)
@@ -199,25 +308,68 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun clickAtPosition(x: Int, y: Int) {
-        val clickPath = Path()
-        clickPath.moveTo(x.toFloat(), y.toFloat())
+    fun performClick(x: Int, y: Int) {
+        Log.d("TOUCH", "Try to click at $x, $y")
         val clickBuilder = GestureDescription.Builder()
-        clickBuilder.addStroke(StrokeDescription(clickPath, 0, 100))
-        dispatchGesture(clickBuilder.build(), null, null)
+        val clickPath = Path()
+
+        clickPath.moveTo(x.toFloat(), y.toFloat())
+
+        clickBuilder.addStroke(GestureDescription.StrokeDescription(clickPath, 0, 100))
+
+        dispatchGesture(
+            clickBuilder.build(),
+            object : AccessibilityService.GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    Log.d("TOUCH", "Touch complete")
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    Log.d("TOUCH", "Touch failed")
+                }
+            },
+            null
+        )
     }
 
-    fun performActionAtPosition(context: Context, x: Int, y: Int, textToType: String?) {
-        clickAtPosition(x, y)
+    fun performTextInput(x: Int, y: Int, text: String) {
+        Log.d("TEXT_INPUT", "Try to input text '$text' at $x, $y")
 
-        try {
-            Thread.sleep(500)
-        } catch (e: InterruptedException) {
-            e.printStackTrace()
-        }
-
+        // Đầu tiên, thực hiện click vào vị trí đó
+//      performClick(x, y)
+        // Sau đó, sử dụng Bundle để chứa text và gửi nó tới hệ thống
         val arguments = Bundle()
-        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, textToType)
-        getRootFromContext(context)?.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        arguments.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+
+        // Tạo một root node
+        val rootInActiveWindow = rootInActiveWindow
+        if (rootInActiveWindow != null) {
+            // Tìm node focus hiện tại (giả sử đó là trường input text sau khi click)
+            val focusedNode = rootInActiveWindow.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+
+            if (focusedNode != null) {
+                // Thực hiện hành động SET_TEXT
+                focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                Log.d("TEXT_INPUT", "Text input complete")
+                Thread.sleep(2000)
+                performClick(1011, 2000)
+            } else {
+                Log.d("TEXT_INPUT", "No focused input field found")
+            }
+
+            rootInActiveWindow.recycle()
+        } else {
+            Log.d("TEXT_INPUT", "No active window")
+        }
+    }
+
+    private fun getNodePosition(node: AccessibilityNodeInfo?): Pair<Int, Int>? {
+        if (node == null) return null
+
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val centerX = rect.left + (rect.right - rect.left) / 2
+        val centerY = rect.top + (rect.bottom - rect.top) / 2
+        return Pair(centerX, centerY)
     }
 }

@@ -10,7 +10,9 @@ import android.view.KeyEvent
 import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
     var myAccessibilityService = MyAccessibilityService();
@@ -51,20 +53,19 @@ class MainActivity : AppCompatActivity() {
         sendBroadcast(intent)
     }
 
-    private suspend fun continueExecution() {
+    private suspend fun continueExecution() = withContext(Dispatchers.Default) {
         openYoutube()
-        myAccessibilityService.nodeToString(application);
-        myAccessibilityService.saveXmlToFile(
-            application,
-            "window_dump.xml",true
-        )
-        Thread.sleep(2000)
-        GlobalScope.launch(Dispatchers.Main) {
-        sendClickCommand(1011, 149)
-        Thread.sleep(2000)
-        sendTypeCommand(1011, 149, "Vietnam")
-        Thread.sleep(2000)
-        sendScrollCommand()
+        myAccessibilityService.nodeToString(application)
+        myAccessibilityService.saveXmlToFile(application, "window_dump.xml", true)
+
+        delay(2000)
+
+        withContext(Dispatchers.Main) {
+            sendClickCommand(1011, 149)
+            delay(2000)
+            sendTypeCommand(1011, 149, "Vietnam")
+            delay(2000)
+            sendScrollCommand()
         }
     }
 
